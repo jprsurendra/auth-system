@@ -1,0 +1,201 @@
+auth-system/
+│
+├── backend-api/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   │
+│   │   ├── main.py
+│   │   │   └── (FastAPI app factory, lifespan,
+│   │   │        middleware stack, exception handlers,
+│   │   │        health endpoints)
+│   │   │
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   └── v1/
+│   │   │       ├── __init__.py
+│   │   │       └── endpoints/
+│   │   │           ├── __init__.py
+│   │   │           └── auth.py
+│   │   │               └── (register, verify email,
+│   │   │                    verify phone, login password,
+│   │   │                    login email OTP, login SMS OTP,
+│   │   │                    Google OAuth, refresh, logout, /me)
+│   │   │
+│   │   ├── core/
+│   │   │   ├── __init__.py
+│   │   │   ├── config.py
+│   │   │   │   └── (Pydantic Settings — all env vars,
+│   │   │   │        production safety checks)
+│   │   │   ├── security.py
+│   │   │   │   └── (JWT, bcrypt, OTP generation,
+│   │   │   │        HMAC signing, cookie helpers)
+│   │   │   └── rate_limiter.py
+│   │   │       └── (Redis sliding-window limiter,
+│   │   │            per-IP per-endpoint)
+│   │   │
+│   │   ├── db/
+│   │   │   ├── __init__.py
+│   │   │   ├── session.py
+│   │   │   │   └── (async SQLAlchemy engine,
+│   │   │   │        connection pool, get_db dependency)
+│   │   │   └── redis.py
+│   │   │       └── (Redis connection pool,
+│   │   │            init/close, get_redis dependency)
+│   │   │
+│   │   ├── middleware/
+│   │   │   ├── __init__.py
+│   │   │   └── error_handler.py
+│   │   │       └── (global exception middleware,
+│   │   │            error report builder,
+│   │   │            support email notification,  ← NEW
+│   │   │            request context extraction)
+│   │   │
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   └── user.py
+│   │   │       └── (User, UserSession, AuditLog
+│   │   │            SQLAlchemy ORM models)
+│   │   │
+│   │   ├── schemas/
+│   │   │   ├── __init__.py
+│   │   │   └── auth.py
+│   │   │       └── (RegisterRequest, LoginRequest,
+│   │   │            OTPRequest, TokenMetadata,
+│   │   │            AuthSuccessResponse, ErrorResponse,
+│   │   │            all Pydantic v2 schemas)
+│   │   │
+│   │   ├── services/
+│   │   │   ├── __init__.py
+│   │   │   ├── otp_service.py
+│   │   │   │   └── (create, store, verify,
+│   │   │   │        consume, invalidate OTPs)
+│   │   │   ├── notification_service.py
+│   │   │   │   └── (send_sms_otp, send_email_otp,
+│   │   │   │        send_email_verification,
+│   │   │   │        send_password_reset_email)
+│   │   │   └── error_notification_service.py
+│   │   │       └── (build_error_report,             ← NEW
+│   │   │            send_support_alert,
+│   │   │            sanitise_request_body)
+│   │   │
+│   │   └── utils/
+│   │       ├── __init__.py
+│   │       └── ip_info.py
+│   │           └── (get_ip_location — geo lookup)  ← NEW
+│   │
+│   ├── alembic/
+│   │   ├── env.py
+│   │   └── versions/
+│   │       └── 0001_initial_schema.py
+│   │
+│   ├── tests/
+│   │   ├── __init__.py
+│   │   ├── conftest.py
+│   │   ├── test_register.py
+│   │   ├── test_verification.py
+│   │   ├── test_login.py
+│   │   └── test_session.py
+│   │
+│   ├── scripts/
+│   │   └── create_superuser.py
+│   │       └── (CLI script to bootstrap first admin)
+│   │
+│   ├── alembic.ini
+│   ├── Dockerfile
+│   ├── .env.example
+│   ├── .dockerignore
+│   └── requirements.txt
+│
+├── frontend-app/
+│   ├── app/
+│   │   ├── layout.tsx
+│   │   │   └── (root layout — AuthProvider,
+│   │   │        token refresh scheduler)
+│   │   ├── page.tsx
+│   │   │   └── (public home / landing page)
+│   │   │
+│   │   ├── login/
+│   │   │   └── page.tsx
+│   │   │       └── (4 login methods — password,
+│   │   │            email OTP, SMS OTP, Google OAuth)
+│   │   │
+│   │   ├── register/
+│   │   │   └── page.tsx
+│   │   │       └── (registration form —
+│   │   │            email, phone, username, password)
+│   │   │
+│   │   ├── verify/
+│   │   │   ├── email/
+│   │   │   │   └── page.tsx
+│   │   │   │       └── (email verification —
+│   │   │   │            reads ?token= from URL)
+│   │   │   └── phone/
+│   │   │       └── page.tsx
+│   │   │           └── (phone OTP verification form)
+│   │   │
+│   │   └── dashboard/
+│   │       └── page.tsx
+│   │           └── (SSR protected page —
+│   │                reads cookie server-side,
+│   │                fetches /me from FastAPI)
+│   │
+│   ├── components/
+│   │   ├── ui/
+│   │   │   ├── InputField.tsx
+│   │   │   ├── SubmitButton.tsx
+│   │   │   └── ErrorBanner.tsx
+│   │   └── auth/
+│   │       └── AuthProvider.tsx
+│   │           └── (React context — user state,
+│   │                token expiry, logout helper)
+│   │
+│   ├── hooks/
+│   │   └── useTokenRefresh.ts
+│   │       └── (silent background token rotation,
+│   │            auto-logout on refresh failure)
+│   │
+│   ├── lib/
+│   │   └── api.ts
+│   │       └── (typed API client — all endpoints,
+│   │            credentials: include on every call,
+│   │            structured error handling)
+│   │
+│   ├── types/
+│   │   └── auth.ts
+│   │       └── (TypeScript interfaces —
+│   │            User, TokenMetadata,
+│   │            AuthResponse, ApiError)
+│   │
+│   ├── middleware.ts
+│   │   └── (Next.js Edge middleware —
+│   │        auth guard, redirect logic)
+│   │
+│   ├── next.config.js
+│   ├── tailwind.config.ts
+│   ├── tsconfig.json
+│   └── package.json
+│
+├── infra/
+│   ├── nginx/
+│   │   ├── dev.conf
+│   │   │   └── (local reverse proxy config)
+│   │   └── prod.conf
+│   │       └── (production — TLS, security headers,
+│   │            rate limiting, gzip)
+│   │
+│   └── k8s/
+│       ├── backend-deployment.yaml
+│       │   └── (Deployment, Service, HPA,
+│       │        PodDisruptionBudget, NetworkPolicy)
+│       ├── frontend-deployment.yaml
+│       └── redis-deployment.yaml
+│
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+│           └── (lint → test → build →
+│                push Docker image → deploy)
+│
+└── docker-compose.yml
+    └── (postgres, pgbouncer, redis,
+         backend, frontend, nginx)

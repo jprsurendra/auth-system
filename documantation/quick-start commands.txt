@@ -1,0 +1,23 @@
+# 1. Clone and set up environment
+cp backend-api/.env.example backend-api/.env
+# Edit .env — add Twilio, SendGrid, Google credentials
+
+# 2. Start all services
+docker-compose up --build
+
+# 3. Run database migrations (first time only)
+docker-compose exec backend alembic upgrade head
+
+# 4. Verify everything is running
+curl http://localhost/health
+# → {"status":"ok","version":"1.0.0","env":"development"}
+
+# 5. Access API docs (dev only)
+open http://localhost:8000/docs
+
+# 6. Access frontend
+open http://localhost:3000/login
+
+# 7. Tear down
+docker-compose down -v
+
