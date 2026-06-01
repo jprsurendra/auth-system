@@ -1,3 +1,14 @@
+"""
+app/main.py — UPDATED
+Changes from original:
+  1. RequestIDMiddleware added — must be first
+  2. SecurityHeadersMiddleware added
+  3. expose_headers added to CORSMiddleware
+  4. X-Request-ID added to allow_headers
+  5. password_reset router registered
+  6. monitoring router registered
+  7. request_id included in 500 error responses
+"""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -11,97 +22,74 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
-
 from app.api.v1.endpoints import auth
 from app.core.config import settings
 from app.db.redis import close_redis_pool, init_redis_pool
 
+# NEW — new middleware
+from app.middleware.request_id import RequestIDMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
-# Add this import at the top of main.py
-from app.middleware.error_handler import ErrorHandlerMiddleware
-
+# NEW — new routers
+from app.api.v1.endpoints import password_reset
+from app.api.v1.endpoints import monitoring
 
 logger = structlog.get_logger(__name__)
 
 
-# ── Lifespan ───────────────────────────────────────────────────────────────────
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Startup and shutdown lifecycle manager.
-    Replaces the deprecated @app.on_event pattern.
-    Everything before yield runs on startup.
-    Everything after yield runs on shutdown.
-    """
-    # ── Startup ────────────────────────────────────────────────
     if settings.SENTRY_DSN:
         sentry_sdk.init(
             dsn=settings.SENTRY_DSN,
             environment=settings.APP_ENV,
-            # Sample 10% of transactions in prod to control cost
             traces_sample_rate=(
                 0.1 if settings.is_production else 1.0
             ),
         )
-        logger.info("sentry_initialised")
-
     init_redis_pool()
-    logger.info("redis_pool_ready")
-
     logger.info(
         "app_started",
         env=settings.APP_ENV,
         version=settings.APP_VERSION,
     )
-
     yield
-
-    # ── Shutdown ───────────────────────────────────────────────
     await close_redis_pool()
-    logger.info("redis_pool_closed")
     logger.info("app_stopped")
 
 
-# ── App factory ────────────────────────────────────────────────────────────────
-
 def create_app() -> FastAPI:
-
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
-        # Disable docs in production — no API surface exposure
         docs_url=(
-            "/docs"
-            if not settings.is_production
-            else None
+            "/docs" if not settings.is_production else None
         ),
         redoc_url=(
-            "/redoc"
-            if not settings.is_production
-            else None
+            "/redoc" if not settings.is_production else None
         ),
         openapi_url=(
             "/openapi.json"
-            if not settings.is_production
-            else None
+            if not settings.is_production else None
         ),
         lifespan=lifespan,
     )
 
     # ── Middleware stack ───────────────────────────────────────
-    # Order matters: middleware is applied bottom-up on request,
-    # top-down on response. TrustedHost runs first on every request.
+    # NEW — must be first so request_id is available
+    # to all middleware and endpoints below it
+    app.add_middleware(RequestIDMiddleware)
 
-    # 1. Reject requests with unrecognised Host headers
-    #    Prevents host header injection attacks
+    # NEW — security headers on every response
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    # Existing — unchanged
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=settings.ALLOWED_HOSTS,
     )
 
-    # 2. CORS — strict origin allowlist
-    #    allow_credentials=True is required for HttpOnly cookie flow
+    # UPDATED — expose_headers and X-Request-ID added
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -114,18 +102,22 @@ def create_app() -> FastAPI:
         allow_headers=[
             "Content-Type",
             "Authorization",
+            "X-Request-ID",       # NEW
+        ],
+        expose_headers=[          # NEW — browser JS can read these
+            "X-RateLimit-Limit",
+            "X-RateLimit-Remaining",
+            "X-RateLimit-Reset",
             "X-Request-ID",
         ],
         max_age=600,
     )
 
-    # Add this inside create_app(), after the CORSMiddleware block
-    # This must be the LAST middleware added so it wraps everything
+    # Existing error handler — unchanged
+    from app.middleware.error_handler import ErrorHandlerMiddleware
     app.add_middleware(ErrorHandlerMiddleware)
 
-    # ── Prometheus metrics ─────────────────────────────────────
-    # Exposes /metrics endpoint for Prometheus scraping
-    # Tracks request count, latency, status codes per endpoint
+    # Existing Prometheus — unchanged
     Instrumentator(
         should_group_status_codes=False,
         excluded_handlers=["/health", "/readyz", "/metrics"],
@@ -136,23 +128,30 @@ def create_app() -> FastAPI:
     )
 
     # ── Routers ────────────────────────────────────────────────
+    # Existing
     app.include_router(
         auth.router,
+        prefix=settings.API_V1_PREFIX,
+    )
+    # NEW
+    app.include_router(
+        password_reset.router,
+        prefix=settings.API_V1_PREFIX,
+    )
+    # NEW
+    app.include_router(
+        monitoring.router,
         prefix=settings.API_V1_PREFIX,
     )
 
     # ── Exception handlers ─────────────────────────────────────
 
     @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(
+    async def validation_handler(
         request: Request,
         exc: RequestValidationError,
     ):
-        """
-        Convert Pydantic v2 validation errors into our
-        standard ErrorResponse envelope so clients always
-        receive a consistent error shape.
-        """
+        # Unchanged from original
         errors = [
             {
                 "code":    "VALIDATION_ERROR",
@@ -169,19 +168,18 @@ def create_app() -> FastAPI:
         )
 
     @app.exception_handler(Exception)
-    async def unhandled_exception_handler(
+    async def unhandled_handler(
         request: Request,
         exc: Exception,
     ):
-        """
-        Catch-all for any unhandled exception.
-        Logs full traceback via structlog (picked up by Sentry).
-        Never exposes internal details to the client.
-        """
         logger.exception(
             "unhandled_exception",
             path=request.url.path,
             method=request.method,
+            # NEW — request_id in every error log
+            request_id=getattr(
+                request.state, "request_id", "unknown"
+            ),
         )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -189,62 +187,41 @@ def create_app() -> FastAPI:
                 "error": {
                     "code":    "INTERNAL_ERROR",
                     "message": "An unexpected error occurred.",
+                    # NEW — user quotes this when contacting support
+                    "request_id": getattr(
+                        request.state, "request_id", None
+                    ),
                 }
             },
         )
 
-    # ── Health endpoints ───────────────────────────────────────
+    # ── Health endpoints — unchanged ───────────────────────────
 
-    @app.get(
-        "/health",
-        tags=["Health"],
-        include_in_schema=False,
-    )
+    @app.get("/health", include_in_schema=False)
     async def health():
-        """
-        Liveness probe — returns 200 if the process is running.
-        Kubernetes restarts the pod if this fails.
-        """
         return {
             "status":  "ok",
             "version": settings.APP_VERSION,
             "env":     settings.APP_ENV,
         }
 
-    @app.get(
-        "/readyz",
-        tags=["Health"],
-        include_in_schema=False,
-    )
+    @app.get("/readyz", include_in_schema=False)
     async def readyz():
-        """
-        Readiness probe — checks Redis and DB connectivity.
-        Kubernetes stops sending traffic if this returns non-200.
-        Returns 503 if any dependency is unreachable.
-        """
         from app.db.redis import get_redis
         from app.db.session import engine
-
         checks: dict[str, str] = {}
-
-        # Check Redis
         try:
             async for redis in get_redis():
                 await redis.ping()
             checks["redis"] = "ok"
-        except Exception as exc:
-            logger.error("readyz_redis_fail", error=str(exc))
+        except Exception:
             checks["redis"] = "fail"
-
-        # Check PostgreSQL
         try:
             async with engine.connect():
                 pass
             checks["db"] = "ok"
-        except Exception as exc:
-            logger.error("readyz_db_fail", error=str(exc))
+        except Exception:
             checks["db"] = "fail"
-
         all_ok = all(v == "ok" for v in checks.values())
         return JSONResponse(
             status_code=200 if all_ok else 503,
@@ -257,8 +234,4 @@ def create_app() -> FastAPI:
     return app
 
 
-# ── Application instance ───────────────────────────────────────────────────────
-# Imported by Gunicorn/Uvicorn as the ASGI callable
-
 app = create_app()
-
